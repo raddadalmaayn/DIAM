@@ -52,7 +52,7 @@ The system is composed of:
 ### Steps
 1. **Clone the Repository**
     ```bash
-    git clone https://github.com/yourusername/DIAM-Part-Record.git
+    git clone https://github.com/raddadalmaayn/DIAM-Part-Record.git
     cd DIAM-Part-Record
     ```
 2. **Install Dependencies**
