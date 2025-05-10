@@ -1,0 +1,279 @@
+Thought for a couple of seconds
+
+
+Below is a **clean‑slate script** you can copy‑paste into a fresh terminal.
+It:
+
+1. **Archives** your current copy (just in case).
+2. **Clones** the upstream samples‑java repo again.
+3. **Builds** the basic CorDapp sample, generates new nodes, and starts them.
+4. **Launches** Party A and Party B REST servers so you’re back at the ready‑for‑KPI point.
+
+---
+
+```bash
+##############################################################################
+## 1.  BACK UP (or delete) THE OLD TREE
+##############################################################################
+
+cd ~                                    #  ← choose any workspace you like
+
+if [ -d samples-java ]; then
+  echo "📦  Archiving existing samples-java → samples-java.bak.$(date +%Y%m%d-%H%M)"
+  mv samples-java samples-java.bak.$(date +%Y%m%d-%H%M)
+fi
+# If you really don’t need the backup, replace mv with:  rm -rf samples-java
+
+##############################################################################
+## 2.  CLONE A FRESH COPY FROM GitHub
+##############################################################################
+
+echo "🔄  Cloning fresh samples‑java repository ..."
+git clone https://github.com/corda/samples-java.git
+cd samples-java/Basic/cordapp-example   # <— project root we’ll build
+
+##############################################################################
+## 3.  BUILD CORDAPPS & GENERATE NODES
+##############################################################################
+
+echo "🔨  Gradle build + deployNodes (this may take ~2 min the first time)"
+./gradlew clean deployNodes
+
+##############################################################################
+## 4.  START THE THREE NODES (Notary, PartyA, PartyB)
+##############################################################################
+
+cd build/nodes
+
+# Option A – dev mode with xterm pop‑ups
+./runnodes &
+
+# ----- OR, if you prefer headless / no X11 -----
+# java -jar Notary/corda.jar &
+# java -jar PartyA/corda.jar  &
+# java -jar PartyB/corda.jar  &
+# -----------------------------------------------
+
+##############################################################################
+## 5.  START PARTY A & PARTY B REST SERVERS (two extra terminals)
+##############################################################################
+
+# ---- terminal TAB 1 ----
+cd ~/samples-java/Basic/cordapp-example
+./gradlew runPartyAServer              # exposes REST on http://localhost:8080
+
+# ---- terminal TAB 2 ----
+cd ~/samples-java/Basic/cordapp-example
+./gradlew runPartyBServer              # exposes REST on http://localhost:8081
+
+##############################################################################
+## 6.  QUICK SMOKE TEST
+##############################################################################
+
+# In yet another tab:
+curl http://localhost:8080/api/status   # → {"status":"UP"}
+curl http://localhost:8081/api/status   # → {"status":"UP"}
+
+echo "✅  Fresh Corda sample network is running."
+```
+
+---
+
+### What to edit next
+
+* **Contracts** → `contracts/src/main/java/net/corda/samples/example/contracts/IOUContract.java`
+* **States**  → `workflows/.../states/IOUState.java` (or add new state)
+* **Flows**  → `workflows/.../flows/**`
+
+After every code change:
+
+```bash
+./gradlew :contracts:compileJava       # quick syntax check
+./gradlew clean deployNodes            # full rebuild + new nodes
+cd build/nodes && ./runnodes           # restart the network
+```
+
+You’re now back to a pristine sample network; tweak contracts or flows at will and iterate.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Thought for 6 seconds
+
+
+🚀 **Great!** Your *Dream Asset* contract, flow, and web-layer are all talking to each other and you just saw a `Transaction committed … id=<hash>` message.
+That means the whole path worked:
+
+1. **HTTP → Spring controller**
+2. **Controller → Corda RPC** (starts `DreamCreateAssetFlow`)
+3. **Flow logic → Notary → Finality**
+4. **Signed transaction persisted in PartyA & PartyB vaults**
+
+Below is a concise “what-now” checklist so you can (a) prove everything really landed in both vaults, and (b) start capturing the KPIs you’ll compare against Hyperledger Fabric.
+
+---
+
+## 1  Verify the state exists on *both* nodes
+
+### Party A shell
+
+```shell
+# open the interactive shell for PartyA
+cd build/nodes/PartyA
+./corda-shell.sh      # or `java -jar corda-shell-*.jar`
+
+# list every DreamAssetState
+run vaultQuery contractStateType: net.corda.samples.example.states.DreamAssetState
+```
+
+You should see an entry whose `linearId` matches the one printed in the REST response.
+
+### Party B shell
+
+```shell
+cd ../PartyB
+./corda-shell.sh
+run vaultQuery contractStateType: net.corda.samples.example.states.DreamAssetState
+```
+
+Because Party B signed as **owner**, it will have the same state.
+
+---
+
+## 2  Exercise more flows
+
+| Flow you already have       | What it proves              | Simple manual test                     |
+| --------------------------- | --------------------------- | -------------------------------------- |
+| `DreamCreateAssetFlow`      | create & notarise           | done ✅                                 |
+| **Next to build**           |                             |                                        |
+| `DreamTransferAssetFlow`    | ownership change round-trip | start flow on PartyA, new owner PartyB |
+| `DreamAdjustVisibilityFlow` | ACL update logic            | add/remove observer and inspect state  |
+| *etc.*                      | firmware / inspection flows | as needed                              |
+
+When you add a flow, remember to:
+
+1. Implement the flow class in **`workflows/`**
+2. Add an HTTP endpoint in **`DreamAssetController`** if you want to trigger it over REST.
+3. Re-run `./gradlew :clients:bootJar` before restarting the web-servers.
+
+---
+
+## 3  Enable metrics for KPI collection
+
+1. **Turn on Prometheus/JMX in the node configs**
+   Edit each node’s `node.conf` (generated under `build/nodes/<Node>/`):
+
+   ```hocon
+   metrics {
+       enabled = true
+       reporters = [ "JMX" ]        # Prometheus if you add the jar
+   }
+   ```
+
+2. **Restart the nodes** (`./runnodes`).
+
+3. **Scrape**
+   *JMX*: connect `jconsole` or the JMX-Exporter agent.
+   *Prometheus*: drop the `corda-metrics-prometheus` jar into `drivers/`, add `Prometheus` to the reporters list, and point Prometheus at `http://localhost:9090/metrics` (default).
+
+   Key counters:
+
+   | Metric                                                       | What to record        |
+   | ------------------------------------------------------------ | --------------------- |
+   | `corda_transactions_total` / `corda_transactions_per_second` | throughput            |
+   | `corda_flow_completed_seconds` histogram                     | latency (p50/p95/p99) |
+   | JVM CPU & heap                                               | resource utilisation  |
+   | `disk usage` of `persistence.mv.db`                          | ledger growth         |
+
+---
+
+## 4  Automated load-test loop
+
+```bash
+#!/usr/bin/env bash
+# save as load.sh and `chmod +x load.sh`
+for i in $(seq 1 200); do
+  curl -s -X POST http://localhost:50005/create-asset \
+       -d assetId="test-$i" \
+       -d quantity=1 \
+       -d ownerX500="O=PartyB,L=New York,C=US" \
+       -d manufacturerX500="O=PartyA,L=London,C=GB" &
+done
+wait
+echo "200 assets created"
+```
+
+Run **while Prometheus is scraping**.
+Export the resulting metrics to CSV (PromQL → CSV, or Grafana export) and keep the same 200-TX profile when you benchmark Fabric.
+
+---
+
+## 5  Clean shutdown & restart tips
+
+*Stop web-servers cleanly (Ctrl-C) or kill them via:*
+
+```bash
+lsof -ti :50005 :50006 | xargs -r kill -9
+```
+
+*Stop nodes cleanly:*
+
+* In each node terminal: `halt` (inside the shell) **or** Ctrl-C.
+  \* If you forget, kill their PIDs the same way.
+
+*Re-deploy nodes after contract/flow changes:*
+
+```bash
+./gradlew clean deployNodes
+cd build/nodes && ./runnodes
+```
+
+---
+
+## 6  Compare with Fabric
+
+| Dimension      | Corda test setup                | Fabric test setup                            |
+| -------------- | ------------------------------- | -------------------------------------------- |
+| Topology       | PartyA, PartyB, Notary (3 JVMs) | Org1-peer, Org2-peer, Orderer (3 containers) |
+| Smart-contract | `DreamAssetContract.java`       | `SmartContract.go`                           |
+| Invoke route   | HTTP → RPC → Flow               | CLI or REST → chaincode                      |
+| Metrics source | Built-in JMX/Prometheus         | Hyperledger peer Prom metrics                |
+| Load profile   | 200 create-asset TX burst       | same number of `CreateAsset` invokes         |
+
+Once you have side-by-side CSVs (TPS, latency, CPU, disk) you can make an apples-to-apples call on which platform better meets your DREAM project KPIs.
+
+---
+
+### Next coding step
+
+Implement **`DreamTransferAssetFlow`**; that unlocks a richer KPI set (two-party signature round-trip, bigger transaction payloads). Ping me when you’re ready or if any metric looks odd. Happy benchmarking! 🎯
+
